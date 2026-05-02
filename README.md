@@ -35,7 +35,7 @@ The agent is implemented as a dedicated class (`InsuranceAgent`) that separates 
 - Python 3.10+
 - Installed dependencies:
   ```bash
-  pip install fastapi uvicorn sqlalchemy requests
+  pip install -r requirements.txt
   ```
 
 ### 2. Run the Application
