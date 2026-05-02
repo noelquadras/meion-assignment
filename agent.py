@@ -5,6 +5,7 @@ from state_machine import State
 from payers.mediassist import MediAssistPayer
 from payers.starhealth import StarHealthPayer
 from payers.paramount import ParamountPayer
+from payers.cghs import CGHSPayer
 import ollama
 
 # Configure logging to output to terminal with timestamps
@@ -28,25 +29,21 @@ class InsuranceAgent:
         self.payer_map = {
             "mediassist": MediAssistPayer(),
             "starhealth": StarHealthPayer(),
-            "paramount": ParamountPayer()
+            "paramount": ParamountPayer(),
+            "cghs": CGHSPayer()
         }
 
     def _analyze_query(self, query_text):
         """
-        Uses local Ollama (qwen2.5-coder:1.5b-base) to analyze the intent of a TPA query.
+        Uses a local LLM (via Ollama) to analyze the intent of a TPA query.
+        Classifies into AUTO_RESOLVE (document requests) or ESCALATE (clinical questions).
         """
-        logger.info(f"🧠 [AI Reasoning] Analyzing with qwen2.5-coder: '{query_text}'")
+        logger.info(f"🧠 [AI Reasoning] Analyzing TPA query with LLM: '{query_text}'")
         
-        prompt = f"""
-        Instructions: You are a hospital billing agent. Analyze the TPA message and return EXACTLY ONE WORD.
-        - If they ask for documents, reports, or ID: return 'AUTO_RESOLVE'
-        - If they ask clinical questions or medical details: return 'ESCALATE'
-
-        TPA Message: "{query_text}"
-        Decision (one word only):"""
+        prompt = f"""Classify this TPA message as AUTO_RESOLVE or ESCALATE. AUTO_RESOLVE means they need a document. ESCALATE means clinical question. Message: {query_text}. Answer with one word only:"""
 
         try:
-            response = ollama.generate(model="qwen2.5-coder:1.5b-base", prompt=prompt)
+            response = ollama.generate(model="gpt-oss:120b-cloud", prompt=prompt)
             decision = response['response'].strip().upper()
             
             if "AUTO_RESOLVE" in decision:

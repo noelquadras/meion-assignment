@@ -16,7 +16,11 @@ function App() {
   useEffect(() => {
     let intervalId;
 
-    if (caseId && caseData?.state !== 'APPROVED' && caseData?.state !== 'REJECTED' && caseData?.state !== 'TIMED_OUT') {
+    const terminalStates = ['APPROVED', 'REJECTED', 'TIMED_OUT', 'ESCALATED'];
+    const isTerminal = caseData && terminalStates.includes(caseData.state);
+    const isInitial = caseData?.state === 'ADMISSION';
+
+    if (caseId && !isTerminal && !isInitial) {
       intervalId = setInterval(async () => {
         try {
           const response = await axios.get(`${API_BASE_URL}/case/${caseId}`);
@@ -53,6 +57,12 @@ function App() {
     try {
       setLoading(true);
       await axios.post(`${API_BASE_URL}/start-case/${caseId}`);
+      
+      // Immediately fetch new state to trigger the polling useEffect
+      // (The agent will have moved state to DOC_CHECK or beyond)
+      const response = await axios.get(`${API_BASE_URL}/case/${caseId}`);
+      setCaseData(response.data);
+      
       setLoading(false);
     } catch (err) {
       setError(err.message || 'Failed to start case');
@@ -72,7 +82,8 @@ function App() {
       RESUBMITTED: { label: 'Resubmitted Docs', icon: <RefreshCw size={16} />, type: 'active' },
       APPROVED: { label: 'Pre-Auth Approved', icon: <CheckCircle size={16} />, type: 'completed' },
       REJECTED: { label: 'Pre-Auth Rejected', icon: <AlertTriangle size={16} />, type: 'error' },
-      TIMED_OUT: { label: 'SLA Timed Out', icon: <AlertTriangle size={16} />, type: 'error' }
+      TIMED_OUT: { label: 'SLA Timed Out', icon: <AlertTriangle size={16} />, type: 'error' },
+      ESCALATED: { label: 'Escalated to Human', icon: <AlertCircle size={16} />, type: 'warning' }
     };
     return states[state] || { label: state, icon: <Activity size={16} />, type: 'active' };
   };
@@ -80,24 +91,46 @@ function App() {
   // Timeline steps to show
   const timelineSteps = ['ADMISSION', 'DOC_CHECK', 'WAITING_RESPONSE', 'QUERY', 'APPROVED'];
 
+  // Map all possible states to a rank for logical ordering
+  const stateRanks = {
+    ADMISSION: 0,
+    DOC_CHECK: 1,
+    WAITING_DOCS: 1,
+    READY: 1.5,
+    SUBMITTED: 2,
+    WAITING_RESPONSE: 2,
+    QUERY: 3,
+    RESUBMITTED: 3.5,
+    APPROVED: 4,
+    REJECTED: 4,
+    QUERY_REJECT: 4,
+    ESCALATED: 4,
+    TIMED_OUT: 4
+  };
+
   const getTimelineItemClass = (step) => {
     if (!caseData) return '';
     
-    // Simplistic timeline logic for demo
-    if (caseData.state === step) {
+    const currentState = caseData.state;
+    
+    // Exact match for the active step
+    if (currentState === step) {
       if (step === 'APPROVED') return 'completed';
       if (step === 'QUERY') return 'warning';
       return 'active';
     }
     
-    const currentIndex = timelineSteps.indexOf(caseData.state);
-    const stepIndex = timelineSteps.indexOf(step);
+    const currentRank = stateRanks[currentState] ?? -1;
+    const stepRank = stateRanks[step] ?? -1;
     
-    // If current state is further along, this step is completed
-    if (currentIndex > stepIndex && currentIndex !== -1) return 'completed';
+    // If current state is further along than this step, it's completed
+    if (currentRank > stepRank && currentRank !== -1) return 'completed';
     
-    // If APPROVED, everything before is completed
-    if (caseData.state === 'APPROVED' && stepIndex !== -1) return 'completed';
+    // Special handling for QUERY state in timeline if we are at a later state
+    if (step === 'QUERY' && currentRank > stateRanks.QUERY) return 'completed';
+
+    // If APPROVED, everything is completed
+    if (currentState === 'APPROVED') return 'completed';
     
     return '';
   };

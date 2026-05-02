@@ -43,6 +43,12 @@ def start_case(case_id: int, background_tasks: BackgroundTasks):
     db = SessionLocal()
     case = db.query(Case).filter(Case.id == case_id).first()
 
+    if not case:
+        return {"error": "Case not found"}, 404
+        
+    if case.state != State.ADMISSION:
+        return {"status": "already started or completed", "state": case.state}
+
     background_tasks.add_task(process_case, db, case)
 
     return {"status": "processing started"}

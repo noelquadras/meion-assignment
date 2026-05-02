@@ -135,18 +135,12 @@ def submit_to_tpa(case_data):
 
 
 def analyze_query(message):
-    logger.info(f"🧠 [AI Reasoning] Analyzing with qwen2.5-coder: '{message}'")
+    logger.info(f"🧠 [AI Reasoning] Analyzing TPA query with LLM: '{message}'")
     
-    prompt = f"""
-    You are a hospital billing agent. Analyze the message and return EXACTLY ONE WORD:
-    - If they need a missing document/report/ID: respond AUTO_RESOLVE
-    - If they ask clinical/medical questions: respond ESCALATE
-
-    Message: "{message}"
-    Decision:"""
+    prompt = f"""Classify this TPA message as AUTO_RESOLVE or ESCALATE. AUTO_RESOLVE means they need a document. ESCALATE means clinical question. Message: {message}. Answer with one word only:"""
 
     try:
-        response = ollama.generate(model="qwen2.5-coder:1.5b-base", prompt=prompt)
+        response = ollama.generate(model="gpt-oss:120b-cloud", prompt=prompt)
         decision = response['response'].strip().upper()
         
         if "AUTO_RESOLVE" in decision:
