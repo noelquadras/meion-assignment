@@ -5,6 +5,7 @@ from state_machine import State
 from payers.mediassist import MediAssistPayer
 from payers.starhealth import StarHealthPayer
 from payers.paramount import ParamountPayer
+import ollama
 
 # Configure logging to output to terminal with timestamps
 logging.basicConfig(
@@ -32,25 +33,37 @@ class InsuranceAgent:
 
     def _analyze_query(self, query_text):
         """
-        Simulates an AI reasoning step (LLM). 
-        In a production environment, this would call an LLM to extract 
-        the intent and entities from a free-text TPA query.
+        Uses local Ollama (qwen2.5-coder:1.5b-base) to analyze the intent of a TPA query.
         """
-        logger.info(f"🧠 [Agent Reasoning] Analyzing query intent: '{query_text}'")
-        time.sleep(1) # Simulate 'thinking'
+        logger.info(f"🧠 [AI Reasoning] Analyzing with qwen2.5-coder: '{query_text}'")
         
-        # Simple heuristic acting as a mock for LLM intent extraction
-        if "missing" in query_text.lower() or "upload" in query_text.lower():
-            logger.info("🎯 [Agent Decision] Intent identified: DOCUMENT_REQUEST. Action: AUTO_RESOLVE")
-            return "AUTO_RESOLVE"
-        
-        logger.warning("🎯 [Agent Decision] Intent identified: CLINICAL_QUERY. Action: ESCALATE")
-        return "ESCALATE"
+        prompt = f"""
+        Instructions: You are a hospital billing agent. Analyze the TPA message and return EXACTLY ONE WORD.
+        - If they ask for documents, reports, or ID: return 'AUTO_RESOLVE'
+        - If they ask clinical questions or medical details: return 'ESCALATE'
+
+        TPA Message: "{query_text}"
+        Decision (one word only):"""
+
+        try:
+            response = ollama.generate(model="qwen2.5-coder:1.5b-base", prompt=prompt)
+            decision = response['response'].strip().upper()
+            
+            if "AUTO_RESOLVE" in decision:
+                logger.info("🎯 [AI Decision] Intent: DOCUMENT_REQUEST. Action: AUTO_RESOLVE")
+                return "AUTO_RESOLVE"
+            else:
+                logger.warning(f"🎯 [AI Decision] Intent: CLINICAL/COMPLEX. Action: ESCALATE (AI said: {decision})")
+                return "ESCALATE"
+        except Exception as e:
+            logger.error(f"❌ AI Reasoning Failed: {e}. Falling back to safe escalation.")
+            return "ESCALATE"
 
     def process_case(self, db, case):
         logger.info(f"🤖 [Agent Start] Orchestrating Case {case.id} for {case.payer}")
         
-        payer_interface = self.payer_map.get(case.payer)
+        payer_key = case.payer.lower().replace(" ", "")
+        payer_interface = self.payer_map.get(payer_key)
         if not payer_interface:
             logger.error(f"Unknown payer: {case.payer}")
             return
@@ -64,11 +77,13 @@ class InsuranceAgent:
             elif case.state == State.DOC_CHECK:
                 missing = [d for d in REQUIRED_DOCS if d not in case.docs]
                 if missing:
-                    logger.info(f"🔍 [Doc Check] Identified missing documents: {missing}")
+                    logger.warning(f"⚠️ [Doc Check] FLAGGED missing documents: {missing}")
+                    logger.info(f"📤 [Action] Requesting missing docs from HMS...")
                     case.docs.extend(missing)
-                    logger.info("📤 [Action] Automatically retrieved missing docs from HMS.")
+                    logger.info("✅ [Action] Retrieved missing docs from HMS.")
                     case.state = State.READY
                 else:
+                    logger.info("✅ [Doc Check] All documents present")
                     case.state = State.READY
 
             elif case.state == State.READY:

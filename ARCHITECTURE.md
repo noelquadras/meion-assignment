@@ -13,13 +13,7 @@ The current billing process at the 80-bed hospital is heavily manual, leading to
 3. **Interfaces** with various TPA endpoints (API or Mocked Portal/Email).
 4. **Reasons** about TPA queries to auto-resolve routine issues or escalate complex clinical queries.
 
-## 2. Agent Design & Reasoning
-The prototype implements a dedicated `InsuranceAgent` class that separates **Perception** from **Reasoning**:
-
-- **Reasoning Step (`_analyze_query`):** The agent simulates an AI intent extraction step. When a TPA sends a free-text query, the agent analyzes it to determine the underlying intent (e.g., `DOCUMENT_REQUEST` vs. `CLINICAL_CLARIFICATION`).
-- **Autonomous Action:** Based on the identified intent, the agent autonomously decides whether it can solve the problem (by fetching data from the HMS) or if it must escalate to a human billing expert.
-
-## 3. State Machine (Medi Assist Case)
+## 2. State Machine (Medi Assist Case)
 The following state machine models the lifecycle of a Medi Assist case:
 
 ```mermaid
@@ -60,7 +54,8 @@ stateDiagram-v2
 | Final Discharge Approval | | ✅ | Financial sign-off; high-stakes action. |
 
 ## 4. Stack and Why
-- **Python / FastAPI:** High-performance, asynchronous framework ideal for handling concurrent I/O (API calls, DB ops).
+- **Python / FastAPI:** High-performance, asynchronous framework ideal for handling concurrent I/O.
+- **Ollama (qwen2.5-coder:1.5b-base):** Local LLM integration for privacy-compliant clinical data reasoning and intent extraction.
 - **SQLAlchemy:** Robust ORM for state persistence, ensuring cases aren't lost on restart.
 - **Logging (Native):** Provides the required audit trail for IRDAI compliance and debugging.
 - **Pydantic:** Strict data validation to ensure submission quality and reduce rejection rates.
