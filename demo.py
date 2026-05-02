@@ -125,12 +125,16 @@ def check_documents():
 
 
 def submit_to_tpa(case_data):
-    logger.info(f"📡 [Submit] POST {MOCK_TPA_URL}")
-    logger.info(f"    Payload: patient={case_data['patient_id']}, "
-                f"policy={case_data['insurance_policy']}, "
-                f"cost=₹{case_data['estimated_cost']:,}")
-
+    logger.info("🌐 [Portal] Navigating to Medi Assist Provider Portal...")
+    time.sleep(1)
+    logger.info(f"📝 [Portal] Filling pre-auth form for patient {case_data['patient_id']}...")
+    logger.info(f"    Policy: {case_data['insurance_policy']} | Cost: ₹{case_data['estimated_cost']:,}")
+    time.sleep(1)
+    logger.info("📤 [Portal] Uploading documents...")
+    
     response = requests.post(MOCK_TPA_URL, json=case_data, timeout=5)
+    logger.info("✅ [Portal] Form submitted successfully. Reference number received.")
+    
     return response.json()
 
 
@@ -198,10 +202,12 @@ def run_demo():
     print()
     transition(State.SUBMITTED)
     response = submit_to_tpa(admission)
-    logger.info(f"📨 [TPA Response] {response}")
     transition(State.WAITING_RESPONSE)
 
     print()
+    logger.info("📧 [Email] Polling hospital inbox for Medi Assist updates...")
+    time.sleep(2)
+    logger.info(f"📨 [Email] Received notification: {response}")
     if response["status"] == "APPROVED":
         logger.info(f"✅ [APPROVED] Auth code: {response.get('auth_code')}")
         transition(State.APPROVED)
@@ -214,14 +220,16 @@ def run_demo():
 
         if decision == "AUTO_RESOLVE":
             print()
-            logger.info("🔄 [Resubmit] Documents corrected, re-sending to TPA...")
+            logger.info("🔄 [Resubmit] Documents corrected, re-uploading via Portal...")
             transition(State.RESUBMITTED)
 
             response = submit_to_tpa(admission)
-            logger.info(f"📨 [TPA Response] {response}")
             transition(State.WAITING_RESPONSE)
 
             print()
+            logger.info("📧 [Email] Polling hospital inbox for Medi Assist updates...")
+            time.sleep(2)
+            logger.info(f"📨 [Email] Received notification: {response}")
             if response["status"] == "APPROVED":
                 logger.info(f"✅ [APPROVED] Auth code: {response.get('auth_code')}")
                 logger.info("    Patient cleared for treatment. Discharge process can begin.")
