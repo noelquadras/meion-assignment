@@ -37,24 +37,36 @@ class InsuranceAgent:
         """
         Uses a local LLM (via Ollama) to analyze the intent of a TPA query.
         Classifies into AUTO_RESOLVE (document requests) or ESCALATE (clinical questions).
+        If AUTO_RESOLVE, also attempts to extract the requested document.
         """
         logger.info(f"🧠 [AI Reasoning] Analyzing TPA query with LLM: '{query_text}'")
         
-        prompt = f"""Classify this TPA message as AUTO_RESOLVE or ESCALATE. AUTO_RESOLVE means they need a document. ESCALATE means clinical question. Message: {query_text}. Answer with one word only:"""
+        prompt = f"""Classify this TPA message. If they are asking for missing documents (like ID proof, insurance card, diagnosis report), respond in this exact format: AUTO_RESOLVE:<document_name>. If it is a complex clinical question, respond with ESCALATE. Message: {query_text}. Answer:"""
 
         try:
             response = ollama.generate(model="gpt-oss:120b-cloud", prompt=prompt)
-            decision = response['response'].strip().upper()
+            decision = response['response'].strip()
             
-            if "AUTO_RESOLVE" in decision:
-                logger.info("🎯 [AI Decision] Intent: DOCUMENT_REQUEST. Action: AUTO_RESOLVE")
-                return "AUTO_RESOLVE"
+            if "AUTO_RESOLVE" in decision.upper():
+                parts = decision.split(":", 1)
+                doc_name = parts[1].strip() if len(parts) > 1 else "unknown_document"
+                
+                # Map common names to our internal IDs
+                doc_id = "unknown"
+                doc_lower = doc_name.lower()
+                if "id" in doc_lower: doc_id = "id_proof"
+                elif "insurance" in doc_lower or "policy" in doc_lower: doc_id = "insurance_card"
+                elif "diagnosis" in doc_lower or "discharge" in doc_lower: doc_id = "diagnosis"
+                else: doc_id = doc_name.replace(" ", "_").lower()
+                
+                logger.info(f"🎯 [AI Decision] Intent: DOCUMENT_REQUEST. Action: AUTO_RESOLVE, Target Doc: {doc_id}")
+                return "AUTO_RESOLVE", doc_id
             else:
                 logger.warning(f"🎯 [AI Decision] Intent: CLINICAL/COMPLEX. Action: ESCALATE (AI said: {decision})")
-                return "ESCALATE"
+                return "ESCALATE", None
         except Exception as e:
             logger.error(f"❌ AI Reasoning Failed: {e}. Falling back to safe escalation.")
-            return "ESCALATE"
+            return "ESCALATE", None
 
     def process_case(self, db, case):
         logger.info(f"🤖 [Agent Start] Orchestrating Case {case.id} for {case.payer}")
@@ -74,14 +86,10 @@ class InsuranceAgent:
             elif case.state == State.DOC_CHECK:
                 missing = [d for d in REQUIRED_DOCS if d not in case.docs]
                 if missing:
-                    logger.warning(f"⚠️ [Doc Check] FLAGGED missing documents: {missing}")
-                    logger.info(f"📤 [Action] Requesting missing docs from HMS...")
-                    case.docs.extend(missing)
-                    logger.info("✅ [Action] Retrieved missing docs from HMS.")
-                    case.state = State.READY
+                    logger.warning(f"⚠️ [Doc Check] FLAGGED missing documents: {missing}. Submitting anyway to demonstrate TPA Query-Back flow.")
                 else:
                     logger.info("✅ [Doc Check] All documents present")
-                    case.state = State.READY
+                case.state = State.READY
 
             elif case.state == State.READY:
                 logger.info(f"📡 [Action] Submitting case data to {case.payer} TPA...")
@@ -99,23 +107,43 @@ class InsuranceAgent:
                         db.commit()
                         break
 
-                response = payer_interface.get_response(case)
-                logger.info(f"📥 [TPA Feedback] Received: {response}")
+                raw_response = payer_interface.get_response(case)
+                logger.info(f"📥 [TPA Feedback] Received: {raw_response}")
 
-                if response == "APPROVED":
+                # Handle both string and dictionary responses for backward compatibility
+                if isinstance(raw_response, dict):
+                    status = raw_response.get("status")
+                    # Map QUERY_BACK to QUERY for the agent's internal state
+                    if status == "QUERY_BACK":
+                        status = "QUERY"
+                else:
+                    status = raw_response
+
+                if status == "APPROVED":
                     case.state = State.APPROVED
-                elif response == "REJECTED":
+                elif status == "REJECTED":
                     case.state = State.QUERY_REJECT
-                elif response == "QUERY":
-                    case.query_text = "Missing diagnosis document"
+                elif status == "QUERY":
+                    # Use the reason from the dict if available
+                    if isinstance(raw_response, dict):
+                        case.query_text = raw_response.get("reason", "Missing diagnosis document")
+                    else:
+                        case.query_text = "Missing diagnosis document"
                     case.state = State.QUERY
                 else:
                     # If TPA hasn't responded yet, wait in this state
                     logger.info("  ... still waiting for TPA response")
 
             elif case.state == State.QUERY:
-                decision = self._analyze_query(case.query_text)
+                decision, missing_doc = self._analyze_query(case.query_text)
                 if decision == "AUTO_RESOLVE":
+                    if missing_doc and missing_doc not in case.docs:
+                        logger.info(f"📤 [Action] Retrieving missing document '{missing_doc}' from HMS...")
+                        # Create a new list to ensure SQLAlchemy detects the change
+                        updated_docs = list(case.docs)
+                        updated_docs.append(missing_doc)
+                        case.docs = updated_docs
+                        logger.info(f"✅ [Action] Added '{missing_doc}' to case documents.")
                     case.state = State.RESUBMITTED
                 else:
                     logger.warning("🚨 [Escalation] Complex query requires human intervention.")
@@ -127,6 +155,7 @@ class InsuranceAgent:
 
             elif case.state == State.RESUBMITTED:
                 logger.info("🔄 [Action] Resubmitting corrected documents to TPA.")
+                payer_interface.submit(case)
                 case.submitted_at = datetime.now() # Reset clock on resubmission
                 case.state = State.WAITING_RESPONSE
 

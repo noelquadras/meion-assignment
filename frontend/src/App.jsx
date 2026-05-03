@@ -8,10 +8,23 @@ const API_BASE_URL = 'http://localhost:8000';
 function App() {
   const [patientId, setPatientId] = useState('P-12345');
   const [payer, setPayer] = useState('Medi Assist');
+  const [selectedDocs, setSelectedDocs] = useState(['id_proof', 'insurance_card']);
   const [caseId, setCaseId] = useState(null);
   const [caseData, setCaseData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+
+  const ALL_DOCS = [
+    { id: 'id_proof', label: 'ID Proof' },
+    { id: 'insurance_card', label: 'Insurance Card' },
+    { id: 'diagnosis', label: 'Diagnosis Report' }
+  ];
+
+  const handleDocToggle = (docId) => {
+    setSelectedDocs(prev => 
+      prev.includes(docId) ? prev.filter(d => d !== docId) : [...prev, docId]
+    );
+  };
 
   useEffect(() => {
     let intervalId;
@@ -36,36 +49,30 @@ function App() {
     };
   }, [caseId, caseData?.state]);
 
-  const handleCreateCase = async () => {
+  const handleProcessCase = async () => {
     try {
       setLoading(true);
       setError(null);
-      const response = await axios.post(`${API_BASE_URL}/create-case/?patient_id=${patientId}&payer=${payer}`);
-      setCaseId(response.data.case_id);
       
-      // Fetch initial state
-      const initialCase = await axios.get(`${API_BASE_URL}/case/${response.data.case_id}`);
-      setCaseData(initialCase.data);
-      setLoading(false);
-    } catch (err) {
-      setError(err.message || 'Failed to create case');
-      setLoading(false);
-    }
-  };
-
-  const handleStartCase = async () => {
-    try {
-      setLoading(true);
-      await axios.post(`${API_BASE_URL}/start-case/${caseId}`);
+      // 1. Create the case
+      const createResponse = await axios.post(`${API_BASE_URL}/create-case/`, {
+        patient_id: patientId,
+        payer: payer,
+        docs: selectedDocs
+      });
+      const newCaseId = createResponse.data.case_id;
+      setCaseId(newCaseId);
       
-      // Immediately fetch new state to trigger the polling useEffect
-      // (The agent will have moved state to DOC_CHECK or beyond)
-      const response = await axios.get(`${API_BASE_URL}/case/${caseId}`);
+      // 2. Start the agent immediately
+      await axios.post(`${API_BASE_URL}/start-case/${newCaseId}`);
+      
+      // 3. Fetch current state to trigger polling/UI
+      const response = await axios.get(`${API_BASE_URL}/case/${newCaseId}`);
       setCaseData(response.data);
       
       setLoading(false);
     } catch (err) {
-      setError(err.message || 'Failed to start case');
+      setError(err.message || 'Failed to process case');
       setLoading(false);
     }
   };
@@ -79,7 +86,7 @@ function App() {
       SUBMITTED: { label: 'Submitted to TPA', icon: <Server size={16} />, type: 'active' },
       WAITING_RESPONSE: { label: 'Waiting TPA Response', icon: <RefreshCw size={16} className="animate-spin" />, type: 'active' },
       QUERY: { label: 'TPA Query Received', icon: <AlertCircle size={16} />, type: 'warning' },
-      RESUBMITTED: { label: 'Resubmitted Docs', icon: <RefreshCw size={16} />, type: 'active' },
+      RESUBMITTED: { label: 'Autonomous Resubmission', icon: <RefreshCw size={16} className="animate-spin" />, type: 'active' },
       APPROVED: { label: 'Pre-Auth Approved', icon: <CheckCircle size={16} />, type: 'completed' },
       REJECTED: { label: 'Pre-Auth Rejected', icon: <AlertTriangle size={16} />, type: 'error' },
       TIMED_OUT: { label: 'SLA Timed Out', icon: <AlertTriangle size={16} />, type: 'error' },
@@ -89,7 +96,7 @@ function App() {
   };
 
   // Timeline steps to show
-  const timelineSteps = ['ADMISSION', 'DOC_CHECK', 'WAITING_RESPONSE', 'QUERY', 'APPROVED'];
+  const timelineSteps = ['ADMISSION', 'DOC_CHECK', 'WAITING_RESPONSE', 'QUERY', 'RESUBMITTED', 'APPROVED'];
 
   // Map all possible states to a rank for logical ordering
   const stateRanks = {
@@ -175,6 +182,24 @@ function App() {
             </select>
           </div>
 
+          <div className="form-group">
+            <label>Available Documents</label>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginTop: '0.5rem' }}>
+              {ALL_DOCS.map(doc => (
+                <label key={doc.id} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', opacity: caseId !== null ? 0.6 : 1 }}>
+                  <input 
+                    type="checkbox" 
+                    checked={selectedDocs.includes(doc.id)}
+                    onChange={() => handleDocToggle(doc.id)}
+                    disabled={caseId !== null}
+                    style={{ width: '16px', height: '16px' }}
+                  />
+                  <span style={{ fontSize: '0.9rem', color: 'var(--text-main)' }}>{doc.label}</span>
+                </label>
+              ))}
+            </div>
+          </div>
+
           {error && (
             <div className="query-alert" style={{ marginTop: '0' }}>
               <div className="query-alert-title"><AlertTriangle size={18}/> Error</div>
@@ -185,22 +210,12 @@ function App() {
           <div style={{ display: 'flex', gap: '1rem', marginTop: '1rem' }}>
             <button 
               className="btn" 
-              onClick={handleCreateCase}
+              onClick={handleProcessCase}
               disabled={loading || caseId !== null}
               style={{ flex: 1 }}
             >
-              <Plus size={18} />
-              Create Case
-            </button>
-            
-            <button 
-              className="btn btn-secondary" 
-              onClick={handleStartCase}
-              disabled={loading || caseId === null || caseData?.state !== 'ADMISSION'}
-              style={{ flex: 1, borderColor: caseId !== null && caseData?.state === 'ADMISSION' ? 'var(--primary)' : 'var(--border-color)', color: caseId !== null && caseData?.state === 'ADMISSION' ? 'var(--primary)' : 'var(--text-main)' }}
-            >
               <Play size={18} />
-              Start AI Agent
+              Run AI Agent
             </button>
           </div>
 
@@ -263,8 +278,8 @@ function App() {
               {caseData.query && (
                 <div className="query-alert">
                   <div className="query-alert-title">
-                    <AlertCircle size={18} />
-                    TPA Query Addressed by Agent
+                    <Activity size={18} />
+                    AI Agent Extracting & Resolving Query
                   </div>
                   <div style={{ fontSize: '0.95rem', lineHeight: '1.5' }}>
                     "{caseData.query}"
